@@ -8306,6 +8306,7 @@ void SurfelGI(
 
 	// Raytracing:
 	{
+		auto rangeRaytrace = wi::profiler::BeginRangeGPU("*** Surfel Raytrace ***", cmd);  // profiler
 		device->EventBegin("Raytrace", cmd);
 
 		device->BindComputeShader(&shaders[CSTYPE_SURFEL_RAYTRACE], cmd);
@@ -8337,6 +8338,7 @@ void SurfelGI(
 		}
 
 		device->EventEnd(cmd);
+		wi::profiler::EndRange(rangeRaytrace);  // profiler - Surfel Raytrace
 	}
 
 

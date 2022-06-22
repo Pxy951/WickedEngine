@@ -72,6 +72,7 @@ namespace wi
 			device->SetName(&primitiveCounterBuffer, "GPUBVH::primitiveCounterBuffer");
 		}
 
+		totalTriangles = 2000;
 		if (totalTriangles == 0)
 		{
 			primitiveCounterBuffer = {};
@@ -140,6 +141,7 @@ namespace wi
 
 		uint32_t primitiveCount = 0;
 
+		auto rangeBVH1 = wi::profiler::BeginRangeGPU("*** BVH - Primitive Builder ***", cmd);  // profiler
 		device->EventBegin("BVH - Primitive Builder", cmd);
 		{
 			device->BindComputeShader(&computeShaders[CSTYPE_BVH_PRIMITIVES], cmd);
@@ -150,6 +152,7 @@ namespace wi
 			};
 			device->BindUAVs(uavs, 0, arraysize(uavs), cmd);
 
+			int submeshCount = 0;
 			for (size_t i = 0; i < scene.objects.GetCount(); ++i)
 			{
 				const ObjectComponent& object = scene.objects[i];
@@ -169,7 +172,9 @@ namespace wi
 						push.primitiveOffset = primitiveCount;
 						device->PushConstants(&push, sizeof(push), cmd);
 
+						if (push.primitiveCount > 500) continue;
 						primitiveCount += push.primitiveCount;
+						++submeshCount;
 
 						device->Dispatch(
 							(push.primitiveCount + BVH_BUILDER_GROUPSIZE - 1) / BVH_BUILDER_GROUPSIZE,
@@ -177,58 +182,61 @@ namespace wi
 							1,
 							cmd
 						);
+						if (primitiveCount > 1000) break;
 					}
-
 				}
+				if (primitiveCount > 1000) break;
 			}
 
-			for (size_t i = 0; i < scene.hairs.GetCount(); ++i)
-			{
-				const wi::HairParticleSystem& hair = scene.hairs[i];
+			//for (size_t i = 0; i < scene.hairs.GetCount(); ++i)
+			//{
+			//	const wi::HairParticleSystem& hair = scene.hairs[i];
 
-				if (hair.meshID != INVALID_ENTITY)
-				{
-					BVHPushConstants push;
-					push.instanceIndex = (uint)(scene.objects.GetCount() + i);
-					push.subsetIndex = 0;
-					push.primitiveCount = hair.segmentCount * hair.strandCount * 2;
-					push.primitiveOffset = primitiveCount;
-					device->PushConstants(&push, sizeof(push), cmd);
+			//	if (hair.meshID != INVALID_ENTITY)
+			//	{
+			//		BVHPushConstants push;
+			//		push.instanceIndex = (uint)(scene.objects.GetCount() + i);
+			//		push.subsetIndex = 0;
+			//		push.primitiveCount = hair.segmentCount * hair.strandCount * 2;
+			//		push.primitiveOffset = primitiveCount;
+			//		device->PushConstants(&push, sizeof(push), cmd);
 
-					primitiveCount += push.primitiveCount;
+			//		primitiveCount += push.primitiveCount;
+			//		++submeshCount;
 
-					device->Dispatch(
-						(push.primitiveCount + BVH_BUILDER_GROUPSIZE - 1) / BVH_BUILDER_GROUPSIZE,
-						1,
-						1,
-						cmd
-					);
-				}
-			}
+			//		device->Dispatch(
+			//			(push.primitiveCount + BVH_BUILDER_GROUPSIZE - 1) / BVH_BUILDER_GROUPSIZE,
+			//			1,
+			//			1,
+			//			cmd
+			//		);
+			//	}
+			//}
 
-			for (size_t i = 0; i < scene.emitters.GetCount(); ++i)
-			{
-				const wi::EmittedParticleSystem& emitter = scene.emitters[i];
+			//for (size_t i = 0; i < scene.emitters.GetCount(); ++i)
+			//{
+			//	const wi::EmittedParticleSystem& emitter = scene.emitters[i];
 
-				if (emitter.GetMaxParticleCount() > 0)
-				{
-					BVHPushConstants push;
-					push.instanceIndex = (uint)(scene.objects.GetCount() + i);
-					push.subsetIndex = 0;
-					push.primitiveCount = emitter.GetMaxParticleCount() * 2;
-					push.primitiveOffset = primitiveCount;
-					device->PushConstants(&push, sizeof(push), cmd);
+			//	if (emitter.GetMaxParticleCount() > 0)
+			//	{
+			//		BVHPushConstants push;
+			//		push.instanceIndex = (uint)(scene.objects.GetCount() + i);
+			//		push.subsetIndex = 0;
+			//		push.primitiveCount = emitter.GetMaxParticleCount() * 2;
+			//		push.primitiveOffset = primitiveCount;
+			//		device->PushConstants(&push, sizeof(push), cmd);
 
-					primitiveCount += push.primitiveCount;
+			//		primitiveCount += push.primitiveCount;
+			//		++submeshCount;
 
-					device->Dispatch(
-						(push.primitiveCount + BVH_BUILDER_GROUPSIZE - 1) / BVH_BUILDER_GROUPSIZE,
-						1,
-						1,
-						cmd
-					);
-				}
-			}
+			//		device->Dispatch(
+			//			(push.primitiveCount + BVH_BUILDER_GROUPSIZE - 1) / BVH_BUILDER_GROUPSIZE,
+			//			1,
+			//			1,
+			//			cmd
+			//		);
+			//	}
+			//}
 
 			GPUBarrier barriers[] = {
 				GPUBarrier::Memory()
@@ -251,11 +259,15 @@ namespace wi
 		}
 
 		device->EventEnd(cmd);
+		wi::profiler::EndRange(rangeBVH1);  // profiler - BVH - Primitive Builder
 
+		auto rangeBVH2 = wi::profiler::BeginRangeGPU("*** BVH - Sort Primitive Mortons ***", cmd);  // profiler
 		device->EventBegin("BVH - Sort Primitive Mortons", cmd);
 		wi::gpusortlib::Sort(primitiveCount, primitiveMortonBuffer, primitiveCounterBuffer, 0, primitiveIDBuffer, cmd);
 		device->EventEnd(cmd);
+		wi::profiler::EndRange(rangeBVH2);  // profiler - BVH - Sort Primitive Mortons
 
+		auto rangeBVH3 = wi::profiler::BeginRangeGPU("*** BVH - Build Hierarchy ***", cmd);  // profiler
 		device->EventBegin("BVH - Build Hierarchy", cmd);
 		{
 			device->BindComputeShader(&computeShaders[CSTYPE_BVH_HIERARCHY], cmd);
@@ -281,7 +293,9 @@ namespace wi
 			device->Barrier(barriers, arraysize(barriers), cmd);
 		}
 		device->EventEnd(cmd);
+		wi::profiler::EndRange(rangeBVH3);  // profiler - BVH - Primitive Builder
 
+		auto rangeBVH4 = wi::profiler::BeginRangeGPU("*** BVH - Propagate AABB ***", cmd);  // profiler
 		device->EventBegin("BVH - Propagate AABB", cmd);
 		{
 			GPUBarrier barriers[] = {
@@ -309,6 +323,7 @@ namespace wi
 			device->Barrier(barriers, arraysize(barriers), cmd);
 		}
 		device->EventEnd(cmd);
+		wi::profiler::EndRange(rangeBVH4);  // profiler - BVH - Propagate AABB
 
 		wi::profiler::EndRange(range); // BVH rebuild
 
